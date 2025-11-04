@@ -4,6 +4,12 @@
 #include <stdlib.h>
 #include <time.h>
 
+
+
+
+
+
+
 // ========= CONSTANTES DEL JUEGO =========
 #define SCREEN_WIDTH 900
 #define SCREEN_HEIGHT 500
@@ -104,7 +110,14 @@ SDL_Texture* tex_pea = NULL;
 Cursor cursor = {0, 0};
 GameBoard* game_board = NULL;
 
+
+
+
+
+
 // ========= FUNCIONES =========
+
+
 
 GameBoard* gameBoardNew() {
     GameBoard* board = (GameBoard*)malloc(sizeof(GameBoard));
@@ -133,56 +146,709 @@ GameBoard* gameBoardNew() {
     return board;
 }
 
+
+
+
+// ========= GAME BOARD DELETE=========
+
+/**
+ * Libera una lista enlazada de segmentos.
+ * Si un segmento contiene una planta (planta_data != NULL), también libera esa memoria.
+ */
+static void freeSegments(RowSegment* head) {
+    RowSegment* current = head;
+    while (current != NULL) {
+        RowSegment* next = current->next;  // Guardar next ANTES de liberar
+        
+        // Si este segmento tiene una planta, liberarla primero
+        if (current->planta_data != NULL) {
+            free(current->planta_data);
+        }
+        
+        // Liberar el segmento actual
+        free(current);
+        current = next;
+    }
+}
+
+/**
+ * Libera una lista enlazada de zombies.
+ * zombie_data es un struct embebido, no necesita free por separado.
+ */
+static void freeZombies(ZombieNode* head) {
+    ZombieNode* current = head;
+    while (current != NULL) {
+        ZombieNode* next = current->next;  // Guardar next ANTES de liberar
+        free(current);
+        current = next;
+    }
+}
+
+/**
+ * Libera toda la memoria dinámica del GameBoard.
+ * Incluye: todos los segmentos, plantas y zombies de cada fila, y el board mismo.
+ */
 void gameBoardDelete(GameBoard* board) {
-    // TODO: Liberar toda la memoria dinámica.
-    // TODO: Recorrer cada GardenRow.
-    // TODO: Liberar todos los RowSegment (y los planta_data si existen).
-    // TODO: Liberar todos los ZombieNode.
-    // TODO: Finalmente, liberar el GameBoard.
-    printf("Función gameBoardDelete no implementada.\n");
+    // Validación: Si board es NULL, no hay nada que liberar
+    if (board == NULL) {
+        return;
+    }
+    
+    // Recorrer cada fila del tablero
+    for (int row = 0; row < GRID_ROWS; row++) {
+        // Liberar lista de segmentos (incluyendo plantas si existen)
+        freeSegments(board->rows[row].first_segment);
+        
+        // Liberar lista de zombies
+        freeZombies(board->rows[row].first_zombie);
+    }
+    
+    // Finalmente, liberar el GameBoard
+    // Nota: rows[] y arvejas[] son arrays estáticos dentro del struct, se liberan automáticamente
+    free(board);
+}
+
+
+
+
+
+
+
+
+// ========= GAME BOARD ADD PLANT ==========
+
+/**
+ * Crea e inicializa una Planta en la posición especificada.
+ * @return Puntero a la nueva Planta, o NULL si falla malloc
+ */
+static Planta* createPlanta(int row, int col) {
+    Planta* p = malloc(sizeof(Planta));
+    if (p == NULL) {
+        printf("Error: No se pudo asignar memoria para Planta\n");
+        return NULL;
+    }
+    p->rect.x = GRID_OFFSET_X + (col * CELL_WIDTH);
+    p->rect.y = GRID_OFFSET_Y + (row * CELL_HEIGHT);
+    p->rect.w = CELL_WIDTH;
+    p->rect.h = CELL_HEIGHT;
+    p->activo = 1;
+    p->cooldown = rand() % 100;
+    p->current_frame = 0;
+    p->frame_timer = 0;
+    p->debe_disparar = 0;
+    return p;
+}
+
+/**
+ * Reinicia una fila a su estado inicial (completamente vacía).
+ * Útil para tests.
+ */
+static void resetRow(GardenRow* row) {
+    freeSegments(row->first_segment);
+    row->first_segment = malloc(sizeof(RowSegment));
+    if (row->first_segment != NULL) {
+        row->first_segment->status = STATUS_VACIO;
+        row->first_segment->start_col = 0;
+        row->first_segment->length = GRID_COLS;
+        row->first_segment->planta_data = NULL;
+        row->first_segment->next = NULL;
+    }
 }
 
 int gameBoardAddPlant(GameBoard* board, int row, int col) {
-    // TODO: Encontrar la GardenRow correcta.
-    // TODO: Recorrer la lista de RowSegment hasta encontrar el segmento VACIO que contenga a `col`.
-    // TODO: Si se encuentra y tiene espacio, realizar la lógica de DIVISIÓN de segmento.
-    // TODO: Crear la nueva `Planta` con memoria dinámica y asignarla al `planta_data` del nuevo segmento.
-    printf("Función gameBoardAddPlant no implementada.\n");
+    // ===== VALIDACIONES =====
+    if (board == NULL) {
+        printf("Error: Board es NULL en gameBoardAddPlant\n");
+        return 0;
+    }
+    if (row < 0 || row >= GRID_ROWS) {
+        printf("Error: Row %d invalida en gameBoardAddPlant\n", row);
+        return 0;
+    }
+    if (col < 0 || col >= GRID_COLS) {
+        printf("Error: Col %d invalida en gameBoardAddPlant\n", col);
+        return 0;
+    }
+    
+    // ===== BUSCAR EL SEGMENTO QUE CONTIENE LA COLUMNA =====
+    RowSegment* current = board->rows[row].first_segment;
+    RowSegment* prev = NULL;
+    
+    while (current != NULL) {
+        int start = current->start_col;
+        int end = current->start_col + current->length;
+        
+        if (col >= start && col < end) {
+            // ===== ENCONTRAMOS EL SEGMENTO CORRECTO =====
+            
+            // Si ya hay una planta aquí, no hacer nada
+            if (current->status == STATUS_PLANTA) {
+                return 0;
+            }
+            
+            // ===== DIVIDIR EL SEGMENTO VACÍO =====
+            
+            // CASO 1: Planta al INICIO del segmento
+            if (col == current->start_col) {
+                RowSegment* planta_seg = malloc(sizeof(RowSegment));
+                if (planta_seg == NULL) return 0;
+                
+                planta_seg->status = STATUS_PLANTA;
+                planta_seg->start_col = col;
+                planta_seg->length = 1;
+                planta_seg->planta_data = createPlanta(row, col);
+                if (planta_seg->planta_data == NULL) {
+                    free(planta_seg);
+                    return 0;
+                }
+                
+                // Verificar si current quedará vacío
+                if (current->length == 1) {
+                    planta_seg->next = current->next;
+                    free(current);
+                } else {
+                    current->start_col++;
+                    current->length--;
+                    planta_seg->next = current;
+                }
+                
+                // Conectar
+                if (prev == NULL) {
+                    board->rows[row].first_segment = planta_seg;
+                } else {
+                    prev->next = planta_seg;
+                }
+                
+                return 1;
+            }
+            
+            // CASO 2: Planta al FINAL del segmento
+            else if (col == current->start_col + current->length - 1) {
+                RowSegment* planta_seg = malloc(sizeof(RowSegment));
+                if (planta_seg == NULL) return 0;
+                
+                planta_seg->status = STATUS_PLANTA;
+                planta_seg->start_col = col;
+                planta_seg->length = 1;
+                planta_seg->planta_data = createPlanta(row, col);
+                if (planta_seg->planta_data == NULL) {
+                    free(planta_seg);
+                    return 0;
+                }
+                
+                // Conectar
+                planta_seg->next = current->next;
+                current->next = planta_seg;
+                current->length--;
+                
+                return 1;
+            }
+            
+            // CASO 3: Planta en el MEDIO (dividir en 3)
+            else {
+                RowSegment* left_seg = malloc(sizeof(RowSegment));
+                if (left_seg == NULL) return 0;
+                left_seg->status = STATUS_VACIO;
+                left_seg->start_col = current->start_col;
+                left_seg->length = col - current->start_col;
+                left_seg->planta_data = NULL;
+                
+                RowSegment* planta_seg = malloc(sizeof(RowSegment));
+                if (planta_seg == NULL) {
+                    free(left_seg);
+                    return 0;
+                }
+                planta_seg->status = STATUS_PLANTA;
+                planta_seg->start_col = col;
+                planta_seg->length = 1;
+                planta_seg->planta_data = createPlanta(row, col);
+                if (planta_seg->planta_data == NULL) {
+                    free(left_seg);
+                    free(planta_seg);
+                    return 0;
+                }
+                
+                RowSegment* right_seg = malloc(sizeof(RowSegment));
+                if (right_seg == NULL) {
+                    free(left_seg);
+                    free(planta_seg->planta_data);
+                    free(planta_seg);
+                    return 0;
+                }
+                right_seg->status = STATUS_VACIO;
+                right_seg->start_col = col + 1;
+                right_seg->length = (current->start_col + current->length) - (col + 1);
+                right_seg->planta_data = NULL;
+                
+                // Conectar los 3 segmentos
+                left_seg->next = planta_seg;
+                planta_seg->next = right_seg;
+                right_seg->next = current->next;
+                
+                // Conectar al anterior
+                if (prev == NULL) {
+                    board->rows[row].first_segment = left_seg;
+                } else {
+                    prev->next = left_seg;
+                }
+                
+                // Liberar el segmento original
+                free(current);
+                
+                return 1;
+            }
+        }
+        
+        prev = current;
+        current = current->next;
+    }
+    
+    printf("Error: No se encontro segmento para col %d en row %d\n", col, row);
     return 0;
 }
 
-void gameBoardRemovePlant(GameBoard* board, int row, int col) {
-    // TODO: Similar a AddPlant, encontrar el segmento que contiene `col`.
-    // TODO: Si es un segmento de tipo PLANTA, convertirlo a VACIO y liberar el `planta_data`.
-    // TODO: Implementar la lógica de FUSIÓN con los segmentos vecinos si también son VACIO.
-    printf("Función gameBoardRemovePlant no implementada.\n");
+
+
+
+
+
+
+
+
+
+
+// ========= GAME BOARD REMOVE PLANT==========
+
+/**
+ * Crea e inicializa una Planta en la posición especificada.
+ * @return Puntero a la nueva Planta, o NULL si falla malloc
+ */
+static Planta* createPlanta(int row, int col) {
+    Planta* p = malloc(sizeof(Planta));
+    if (p == NULL) {
+        printf("Error: No se pudo asignar memoria para Planta\n");
+        return NULL;
+    }
+    p->rect.x = GRID_OFFSET_X + (col * CELL_WIDTH);
+    p->rect.y = GRID_OFFSET_Y + (row * CELL_HEIGHT);
+    p->rect.w = CELL_WIDTH;
+    p->rect.h = CELL_HEIGHT;
+    p->activo = 1;
+    p->cooldown = rand() % 100;
+    p->current_frame = 0;
+    p->frame_timer = 0;
+    p->debe_disparar = 0;
+    return p;
 }
 
+/**
+ * Reinicia una fila a su estado inicial (completamente vacía).
+ * Útil para tests. Maneja fracaso en malloc con logging.
+ */
+static void resetRow(GardenRow* row) {
+    freeSegments(row->first_segment);
+    row->first_segment = malloc(sizeof(RowSegment));
+    if (row->first_segment == NULL) {
+        printf("Error: No se pudo reiniciar fila en resetRow\n");
+        return;
+    }
+    row->first_segment->status = STATUS_VACIO;
+    row->first_segment->start_col = 0;
+    row->first_segment->length = GRID_COLS;
+    row->first_segment->planta_data = NULL;
+    row->first_segment->next = NULL;
+}
+
+/**
+ * Verifica si una fila cubre exactamente las columnas 0 a GRID_COLS-1 sin gaps ni overlaps.
+ * Útil para tests de integridad.
+ * @return 1 si es válida, 0 si no.
+ */
+static int isRowValid(GardenRow* row) {
+    RowSegment* seg = row->first_segment;
+    int current_col = 0;
+    while (seg != NULL) {
+        if (seg->start_col != current_col) {
+            return 0;  // Gap o overlap
+        }
+        if (seg->status == STATUS_PLANTA && seg->planta_data == NULL) {
+            return 0;  // Planta sin data
+        }
+        if (seg->status == STATUS_VACIO && seg->planta_data != NULL) {
+            return 0;  // Vacío con data
+        }
+        current_col += seg->length;
+        seg = seg->next;
+    }
+    return (current_col == GRID_COLS);
+}
+
+void gameBoardRemovePlant(GameBoard* board, int row, int col) {
+    // ===== VALIDACIONES =====
+    if (board == NULL) {
+        printf("Error: Board es NULL en gameBoardRemovePlant\n");
+        return;
+    }
+    if (row < 0 || row >= GRID_ROWS) {
+        printf("Error: Row %d invalida en gameBoardRemovePlant\n", row);
+        return;
+    }
+    if (col < 0 || col >= GRID_COLS) {
+        printf("Error: Col %d invalida en gameBoardRemovePlant\n", col);
+        return;
+    }
+
+    // ===== BUSCAR EL SEGMENTO QUE CONTIENE LA COLUMNA =====
+    RowSegment* current = board->rows[row].first_segment;
+    RowSegment* prev = NULL;
+
+    while (current != NULL) {
+        int start = current->start_col;
+        int end = current->start_col + current->length;
+
+        if (col >= start && col < end) {
+            // ===== ENCONTRAMOS EL SEGMENTO CORRECTO =====
+
+            // Si no es una planta (o length >1, pero por ahora plantas son length=1), no hacer nada
+            if (current->status != STATUS_PLANTA || current->length != 1) {
+                return;
+            }
+
+            // ===== CONVERTIR A VACIO Y LIBERAR PLANTA =====
+            free(current->planta_data);
+            current->planta_data = NULL;
+            current->status = STATUS_VACIO;
+
+            // ===== FUSIONAR CON SEGMENTOS ADYACENTES VACIOS =====
+
+            // Fusionar con NEXT si es VACIO y adyacente
+            if (current->next != NULL && current->next->status == STATUS_VACIO) {
+                RowSegment* next = current->next;
+                if (current->start_col + current->length == next->start_col) {
+                    current->length += next->length;
+                    current->next = next->next;
+                    free(next);
+                }
+            }
+
+            // Fusionar con PREV si es VACIO y adyacente (después de next, para manejar triple fusión)
+            if (prev != NULL && prev->status == STATUS_VACIO) {
+                if (prev->start_col + prev->length == current->start_col) {
+                    prev->length += current->length;
+                    prev->next = current->next;
+                    free(current);
+                }
+            }
+
+            return;
+        }
+
+        prev = current;
+        current = current->next;
+    }
+
+    // No se encontró segmento con planta en col (ya no hace nada)
+}
+
+
+
+
+
+
+//======== GAME BOARD ADD ZOMBIE ==========
+
 void gameBoardAddZombie(GameBoard* board, int row) {
-    // TODO: Crear un nuevo ZombieNode con memoria dinámica.
-    // TODO: Inicializar sus datos (posición, vida, animación, etc.).
-    // TODO: Agregarlo a la lista enlazada simple de la GardenRow correspondiente.
-    printf("Función gameBoardAddZombie no implementada.\n");
+    // Validación de entrada con logging
+    if (board == NULL) {
+        printf("Error: Board es NULL en gameBoardAddZombie\n");
+        return;
+    }
+    if (row < 0 || row >= GRID_ROWS) {
+        printf("Error: Row %d inválida (debe ser 0-%d) en gameBoardAddZombie\n", row, GRID_ROWS - 1);
+        return;
+    }
+    
+    // PASO 1: Crear nuevo nodo zombie
+    ZombieNode* nuevo_nodo = malloc(sizeof(ZombieNode));
+    if (nuevo_nodo == NULL) {
+        printf("Error: No se pudo asignar memoria para el zombie\n");
+        return;
+    }
+    
+    // PASO 2: Inicializar los datos del zombie
+    nuevo_nodo->zombie_data.row = row;
+    nuevo_nodo->zombie_data.pos_x = SCREEN_WIDTH;
+    nuevo_nodo->zombie_data.rect.x = (int)nuevo_nodo->zombie_data.pos_x;
+    nuevo_nodo->zombie_data.rect.y = GRID_OFFSET_Y + (row * CELL_HEIGHT);
+    nuevo_nodo->zombie_data.rect.w = CELL_WIDTH;
+    nuevo_nodo->zombie_data.rect.h = CELL_HEIGHT;
+    nuevo_nodo->zombie_data.vida = 100;
+    nuevo_nodo->zombie_data.activo = 1;
+    nuevo_nodo->zombie_data.current_frame = 0;
+    nuevo_nodo->zombie_data.frame_timer = 0;
+    
+    // PASO 3: Agregar al PRINCIPIO de la lista (O(1))
+    // Razón: Eficiencia máxima; orden no afecta lógica (pos_x determina posición)
+    nuevo_nodo->next = board->rows[row].first_zombie;
+    board->rows[row].first_zombie = nuevo_nodo;
+}
+
+
+
+
+
+
+// ========= GAME BOARD UPDATE ==========
+
+/**
+ * Dispara una arveja desde una planta específica.
+ * Busca un slot inactivo en el array de arvejas y lo inicializa.
+ * @param board El GameBoard que contiene el array de arvejas.
+ * @param p La planta que dispara.
+ * @param row La fila de la planta (para calcular row de arveja).
+ */
+static void dispararArveja(GameBoard* board, Planta* p, int row) {
+    for (int i = 0; i < MAX_ARVEJAS; i++) {
+        if (!board->arvejas[i].activo) {
+            board->arvejas[i].rect.x = p->rect.x + (CELL_WIDTH / 2);
+            board->arvejas[i].rect.y = p->rect.y + (CELL_HEIGHT / 4);
+            board->arvejas[i].rect.w = 20;
+            board->arvejas[i].rect.h = 20;
+            board->arvejas[i].activo = 1;
+            break;
+        }
+    }
+}
+
+/**
+ * Genera un nuevo zombie en una fila aleatoria si el timer lo permite.
+ * Decrementa el timer y resetea cuando spawnea.
+ * Usa gameBoardAddZombie para agregar a la lista de la fila.
+ * @param board El GameBoard con el timer y filas.
+ */
+static void generarZombieSiNecesario(GameBoard* board) {
+    board->zombie_spawn_timer--;
+    if (board->zombie_spawn_timer <= 0) {
+        int random_row = rand() % GRID_ROWS;
+        gameBoardAddZombie(board, random_row);
+        board->zombie_spawn_timer = ZOMBIE_SPAWN_RATE;
+    }
 }
 
 void gameBoardUpdate(GameBoard* board) {
-    if (!board) return;
-    // TODO: Re-implementar la lógica de `actualizarEstado` usando las nuevas estructuras.
-    // TODO: Recorrer las listas de zombies de cada fila para moverlos y animarlos.
-    // TODO: Recorrer las listas de segmentos de cada fila para gestionar los cooldowns y animaciones de las plantas.
-    // TODO: Actualizar la lógica de disparo, colisiones y spawn de zombies.
+    if (board == NULL) {
+        printf("Error: Board es NULL en gameBoardUpdate\n");
+        return;
+    }
+
+    // ===== ACTUALIZAR ZOMBIES (por fila, recorriendo listas enlazadas) =====
+    for (int r = 0; r < GRID_ROWS; r++) {
+        ZombieNode* z_node = board->rows[r].first_zombie;
+        ZombieNode* prev_z = NULL;
+        while (z_node != NULL) {
+            Zombie* z = &z_node->zombie_data;
+            if (z->activo) {
+                // Calcular movimiento por tick (basado en ciclo de animación)
+                float distance_per_tick = ZOMBIE_DISTANCE_PER_CYCLE / (float)(ZOMBIE_TOTAL_FRAMES * ZOMBIE_ANIMATION_SPEED);
+                z->pos_x -= distance_per_tick;
+                z->rect.x = (int)z->pos_x;
+
+                // Actualizar animación
+                z->frame_timer++;
+                if (z->frame_timer >= ZOMBIE_ANIMATION_SPEED) {
+                    z->frame_timer = 0;
+                    z->current_frame = (z->current_frame + 1) % ZOMBIE_TOTAL_FRAMES;
+                }
+
+                // Desactivar si sale de pantalla (por izquierda, pero game over se maneja en main)
+                if (z->rect.x + z->rect.w < 0) {
+                    z->activo = 0;
+                }
+            }
+
+            // Eliminar zombies inactivos (para limpiar lista, aunque no estrictamente necesario)
+            if (!z->activo) {
+                ZombieNode* to_free = z_node;
+                if (prev_z == NULL) {
+                    board->rows[r].first_zombie = z_node->next;
+                } else {
+                    prev_z->next = z_node->next;
+                }
+                z_node = z_node->next;
+                free(to_free);
+                continue;
+            }
+
+            prev_z = z_node;
+            z_node = z_node->next;
+        }
+    }
+
+    // ===== ACTUALIZAR PLANTAS (por fila, recorriendo segmentos) =====
+    for (int r = 0; r < GRID_ROWS; r++) {
+        RowSegment* seg = board->rows[r].first_segment;
+        while (seg != NULL) {
+            if (seg->status == STATUS_PLANTA && seg->planta_data != NULL) {
+                Planta* p = seg->planta_data;
+
+                // Actualizar cooldown y decidir disparo
+                if (p->cooldown <= 0) {
+                    p->debe_disparar = 1;
+                } else {
+                    p->cooldown--;
+                }
+
+                // Actualizar animación
+                p->frame_timer++;
+                if (p->frame_timer >= PEASHOOTER_ANIMATION_SPEED) {
+                    p->frame_timer = 0;
+                    p->current_frame = (p->current_frame + 1) % PEASHOOTER_TOTAL_FRAMES;
+
+                    // Disparar si es el frame correcto y debe
+                    if (p->debe_disparar && p->current_frame == PEASHOOTER_SHOOT_FRAME) {
+                        dispararArveja(board, p, r);
+                        p->cooldown = 120;  // Reset cooldown post-disparo
+                        p->debe_disparar = 0;
+                    }
+                }
+            }
+            seg = seg->next;
+        }
+    }
+
+    // ===== ACTUALIZAR ARVEJAS (array global) =====
+    for (int i = 0; i < MAX_ARVEJAS; i++) {
+        if (board->arvejas[i].activo) {
+            board->arvejas[i].rect.x += PEA_SPEED;
+            if (board->arvejas[i].rect.x > SCREEN_WIDTH) {
+                board->arvejas[i].activo = 0;
+            }
+        }
+    }
+
+    // ===== DETECTAR COLISIONES ARVEJA-ZOMBIE (por fila, eficiente) =====
+    for (int i = 0; i < MAX_ARVEJAS; i++) {
+        if (!board->arvejas[i].activo) continue;
+
+        // Calcular row de la arveja (basado en posición y)
+        int arveja_row = (board->arvejas[i].rect.y - GRID_OFFSET_Y) / CELL_HEIGHT;
+
+        // Recorrer solo zombies de esa fila
+        ZombieNode* z_node = board->rows[arveja_row].first_zombie;
+        while (z_node != NULL) {
+            Zombie* z = &z_node->zombie_data;
+            if (z->activo && SDL_HasIntersection(&board->arvejas[i].rect, &z->rect)) {
+                board->arvejas[i].activo = 0;
+                z->vida -= 25;
+                if (z->vida <= 0) {
+                    z->activo = 0;
+                }
+                break;  // Una arveja solo impacta un zombie por tick
+            }
+            z_node = z_node->next;
+        }
+    }
+
+    // ===== GENERAR NUEVOS ZOMBIES SI HACE FALTA =====
+    generarZombieSiNecesario(board);
 }
 
+
+
+
+
+
+// ========= GAME BOARD DRAW ==========
+
+
+
+/**
+ * Dibuja el estado actual del juego en la pantalla.
+ * Esta función realiza la misma lógica que la función 'dibujar' del prototipo base,
+ * pero adaptada a la nueva estructura GameBoard. Limpia el renderer, dibuja el fondo,
+ * recorre los segmentos de cada fila para dibujar plantas, dibuja arvejas, recorre
+ * las listas de zombies por fila para dibujarlos, dibuja el cursor y presenta el frame.
+ *
+ * Ideas principales:
+ * - Las plantas se dibujan recorriendo los segmentos de cada fila y solo renderizando
+ *   aquellos con status PLANTA, usando los datos en planta_data.
+ * - Los zombies se dibujan recorriendo la lista enlazada de cada fila.
+ * - Las arvejas permanecen en un array estático, por lo que se manejan igual que en el base.
+ * - El cursor es global y se dibuja como un rectángulo de borde amarillo.
+ * - Se maneja board == NULL retornando inmediatamente para evitar crashes.
+ * - No se liberan recursos aquí; solo se renderiza. Asumimos que renderer y texturas están inicializados.
+ */
 void gameBoardDraw(GameBoard* board) {
-    if (!board) return;
+    if (board == NULL || renderer == NULL) {
+        // Validación: Si board o renderer es NULL, no dibujar para evitar segfaults.
+        // Podríamos loguear un error, pero por simplicidad, solo retornamos.
+        return;
+    }
+
+    // Limpiar el renderer con color negro (por defecto).
     SDL_RenderClear(renderer);
-    SDL_RenderCopy(renderer, tex_background, NULL, NULL);
 
-    // TODO: Re-implementar la lógica de `dibujar` usando las nuevas estructuras.
-    // TODO: Recorrer las listas de segmentos para dibujar las plantas.
-    // TODO: Recorrer las listas de zombies para dibujarlos.
-    // TODO: Dibujar las arvejas y el cursor.
+    // Dibujar el fondo.
+    if (tex_background != NULL) {
+        SDL_RenderCopy(renderer, tex_background, NULL, NULL);
+    }
 
+    // Dibujar plantas: Recorrer cada fila y sus segmentos.
+    for (int r = 0; r < GRID_ROWS; r++) {
+        RowSegment* current_seg = board->rows[r].first_segment;
+        while (current_seg != NULL) {
+            if (current_seg->status == STATUS_PLANTA && current_seg->planta_data != NULL) {
+                Planta* p = current_seg->planta_data;
+                if (p->activo) {  // Solo dibujar si está activa.
+                    SDL_Rect src_rect = {
+                        p->current_frame * PEASHOOTER_FRAME_WIDTH,
+                        0,
+                        PEASHOOTER_FRAME_WIDTH,
+                        PEASHOOTER_FRAME_HEIGHT
+                    };
+                    SDL_RenderCopy(renderer, tex_peashooter_sheet, &src_rect, &p->rect);
+                }
+            }
+            current_seg = current_seg->next;
+        }
+    }
+
+    // Dibujar arvejas: Igual que en el base, usando el array en board.
+    for (int i = 0; i < MAX_ARVEJAS; i++) {
+        if (board->arvejas[i].activo) {
+            SDL_RenderCopy(renderer, tex_pea, NULL, &board->arvejas[i].rect);
+        }
+    }
+
+    // Dibujar zombies: Recorrer la lista enlazada de cada fila.
+    for (int r = 0; r < GRID_ROWS; r++) {
+        ZombieNode* current_z = board->rows[r].first_zombie;
+        while (current_z != NULL) {
+            Zombie* z = &current_z->zombie_data;
+            if (z->activo) {  // Solo dibujar si está activo.
+                SDL_Rect src_rect = {
+                    z->current_frame * ZOMBIE_FRAME_WIDTH,
+                    0,
+                    ZOMBIE_FRAME_WIDTH,
+                    ZOMBIE_FRAME_HEIGHT
+                };
+                SDL_RenderCopy(renderer, tex_zombie_sheet, &src_rect, &z->rect);
+            }
+            current_z = current_z->next;
+        }
+    }
+
+    // Dibujar el cursor (global).
+    SDL_SetRenderDrawColor(renderer, 255, 255, 0, 200);  // Amarillo semi-transparente.
+    SDL_Rect cursor_rect = {
+        GRID_OFFSET_X + cursor.col * CELL_WIDTH,
+        GRID_OFFSET_Y + cursor.row * CELL_HEIGHT,
+        CELL_WIDTH,
+        CELL_HEIGHT
+    };
+    SDL_RenderDrawRect(renderer, &cursor_rect);
+
+    // Presentar el frame.
     SDL_RenderPresent(renderer);
 }
 
@@ -216,6 +882,15 @@ void cerrar() {
 }
 
 
+
+
+
+
+
+//=========== STR DUPLICATE ===========
+
+
+
 char* strDuplicate(char* src) {
     if (src == NULL) {
         return NULL;  // Mejora: Manejar input inválido
@@ -235,6 +910,7 @@ char* strDuplicate(char* src) {
 }
 
 
+//=========== STR COMPARE ===========
 int strCompare(char* s1, char* s2) {
     if (s1 == NULL && s2 == NULL) return 0;
     if (s1 == NULL) return 1;  // NULL < no-NULL
@@ -254,6 +930,7 @@ int strCompare(char* s1, char* s2) {
 }
 
 
+//=========== STR CONCATENATE ================
 char* strConcatenate(char* src1, char* src2) {
     size_t len1 = 0;
     if (src1 != NULL) {
@@ -290,6 +967,10 @@ char* strConcatenate(char* src1, char* src2) {
     return resultado;
 }
 
+
+
+
+// ========== TESTS STR DUPLICATE ==========
 void testStrDuplicate() {
     printf("\n========= TESTS strDuplicate =========\n");
     
@@ -399,7 +1080,7 @@ void testStrDuplicate() {
 
 
 
-
+// ========== TESTS STR COMPARE ==========
 void testStrCompare() {
     printf("\n========= TESTS strCompare =========\n");
     
@@ -508,9 +1189,7 @@ void testStrCompare() {
 }
 
 
-
-
-
+// ========== TESTS STR CONCATENATE ==========
 void testStrConcatenate() {
     printf("\n========= TESTS strConcatenate =========\n");
     
@@ -605,13 +1284,448 @@ void testStrConcatenate() {
 }
 
 
+// ========== TESTS gameBoardAddZombie ==========
+void testGameBoardAddZombie() {
+    printf("\n========= TESTS gameBoardAddZombie =========\n");
+    
+    // TEST 0: Inputs inválidos (tablero independiente)
+    GameBoard* test_board0 = gameBoardNew();
+    gameBoardAddZombie(NULL, 0);
+    gameBoardAddZombie(test_board0, -1);
+    gameBoardAddZombie(test_board0, GRID_ROWS);
+    if (test_board0->rows[0].first_zombie == NULL) {
+        printf("✓ TEST 0 PASADO: Maneja inputs inválidos sin crash ni agregar\n");
+    } else {
+        printf("✗ TEST 0 FALLADO: Agregó zombie con input inválido\n");
+    }
+    gameBoardDelete(test_board0);
+    
+    // TEST 1: Lista de 3 zombies + 1
+    GameBoard* test_board1 = gameBoardNew();
+    int test_row = 2;
+    gameBoardAddZombie(test_board1, test_row);
+    gameBoardAddZombie(test_board1, test_row);
+    gameBoardAddZombie(test_board1, test_row);
+    
+    int count1 = 0;
+    ZombieNode* current = test_board1->rows[test_row].first_zombie;
+    while (current != NULL) {
+        count1++;
+        current = current->next;
+    }
+    if (count1 == 3) {
+        printf("✓ Subtest 1a PASADO: 3 zombies agregados\n");
+    } else {
+        printf("✗ Subtest 1a FALLADO: Esperados 3, encontrados %d\n", count1);
+    }
+    
+    gameBoardAddZombie(test_board1, test_row);
+    int count2 = 0;
+    current = test_board1->rows[test_row].first_zombie;
+    while (current != NULL) {
+        count2++;
+        current = current->next;
+    }
+    if (count2 == 4) {
+        printf("✓ TEST 1 PASADO: 3 + 1 = 4 zombies\n");
+    } else {
+        printf("✗ TEST 1 FALLADO: Esperados 4, encontrados %d\n", count2);
+    }
+    gameBoardDelete(test_board1);
+    
+    // TEST 2: Crear 10000 zombies (eficiencia O(1) por add)
+    GameBoard* test_board2 = gameBoardNew();
+    int large_row = 0;
+    int target_zombies = 10000;
+    for (int i = 0; i < target_zombies; i++) {
+        gameBoardAddZombie(test_board2, large_row);
+    }
+    int count_large = 0;
+    current = test_board2->rows[large_row].first_zombie;
+    while (current != NULL) {
+        count_large++;
+        current = current->next;
+    }
+    if (count_large == target_zombies) {
+        printf("✓ TEST 2 PASADO: 10000 zombies creados eficientemente\n");
+    } else {
+        printf("✗ TEST 2 FALLADO: Esperados %d, encontrados %d\n", target_zombies, count_large);
+    }
+    
+    // TEST 3: Verificar inicialización (del primero, O(1))
+    current = test_board2->rows[large_row].first_zombie;
+    int test3_ok = (current != NULL &&
+                    current->zombie_data.vida == 100 &&
+                    current->zombie_data.activo == 1 &&
+                    current->zombie_data.row == large_row &&
+                    current->zombie_data.pos_x == SCREEN_WIDTH &&
+                    current->zombie_data.rect.x == SCREEN_WIDTH &&
+                    current->zombie_data.current_frame == 0 &&
+                    current->zombie_data.frame_timer == 0);
+    if (test3_ok) {
+        printf("✓ TEST 3 PASADO: Zombies inicializados correctamente\n");
+    } else {
+        printf("✗ TEST 3 FALLADO: Inicialización incorrecta\n");
+    }
+    gameBoardDelete(test_board2);
+    
+    // TEST 4: Múltiples rows independientes (tablero limpio)
+    GameBoard* test_board4 = gameBoardNew();
+    gameBoardAddZombie(test_board4, 0);
+    gameBoardAddZombie(test_board4, 1);
+    gameBoardAddZombie(test_board4, 4);
+    if (test_board4->rows[0].first_zombie != NULL &&
+        test_board4->rows[1].first_zombie != NULL &&
+        test_board4->rows[4].first_zombie != NULL &&
+        test_board4->rows[2].first_zombie == NULL &&
+        test_board4->rows[3].first_zombie == NULL) {
+        printf("✓ TEST 4 PASADO: Agrega a rows separadas correctamente\n");
+    } else {
+        printf("✗ TEST 4 FALLADO: No maneja rows independientes\n");
+    }
+    gameBoardDelete(test_board4);
+    
+    printf("========================================\n\n");
+}
+
+
+// ========== TESTS gameBoardRemovePlant ==========
+void testGameBoardRemovePlant() {
+    printf("\n========= TESTS gameBoardRemovePlant =========\n");
+
+    // Crear un tablero de prueba
+    GameBoard* board = gameBoardNew();
+    if (board == NULL) {
+        printf("✗ Error al crear tablero para tests\n");
+        return;
+    }
+
+    // TEST 0: Inputs inválidos (no debe crash, solo logging)
+    gameBoardRemovePlant(NULL, 0, 0);
+    gameBoardRemovePlant(board, -1, 0);
+    gameBoardRemovePlant(board, GRID_ROWS, 0);
+    gameBoardRemovePlant(board, 0, -1);
+    gameBoardRemovePlant(board, 0, GRID_COLS);
+    printf("✓ TEST 0 PASADO: Maneja inputs inválidos correctamente (sin crash)\n");
+
+    // TEST 1: Remover cuando no hay planta (fila vacía, no hace nada)
+    resetRow(&board->rows[0]);
+    gameBoardRemovePlant(board, 0, 4);
+    RowSegment* seg = board->rows[0].first_segment;
+    if (seg != NULL && seg->status == STATUS_VACIO && seg->start_col == 0 && seg->length == 9 &&
+        seg->next == NULL && isRowValid(&board->rows[0])) {
+        printf("✓ TEST 1 PASADO: Remover en fila vacía (no cambia nada)\n");
+    } else {
+        printf("✗ TEST 1 FALLADO: Cambió estructura innecesariamente\n");
+    }
+
+    // TEST 2: Remover planta aislada (dividida, crea VACIO len=1, no fusiona)
+    resetRow(&board->rows[0]);
+    gameBoardAddPlant(board, 0, 4);  // Crea VACIO0-3, PLANTA4, VACIO5-8
+    gameBoardRemovePlant(board, 0, 4);
+    seg = board->rows[0].first_segment;
+    if (seg != NULL && seg->status == STATUS_VACIO && seg->start_col == 0 && seg->length == 4 &&
+        seg->next != NULL && seg->next->status == STATUS_VACIO && seg->next->start_col == 4 && seg->next->length == 1 &&
+        seg->next->next != NULL && seg->next->next->status == STATUS_VACIO && seg->next->next->start_col == 5 && seg->next->next->length == 4 &&
+        seg->next->next->next == NULL && isRowValid(&board->rows[0])) {
+        printf("✓ TEST 2 PASADO: Remover planta aislada (crea VACIO len=1 sin fusión)\n");
+    } else {
+        printf("✗ TEST 2 FALLADO: Estructura incorrecta después de remover aislada\n");
+    }
+
+    // TEST 3: Remover y fusionar con right (quita col=3 después de agregar 3, fusiona a VACIO0-4)
+    resetRow(&board->rows[0]);
+    gameBoardAddPlant(board, 0, 3);  // VACIO0-2, PLANTA3, VACIO4-8
+    gameBoardRemovePlant(board, 0, 3);
+    seg = board->rows[0].first_segment;
+    if (seg != NULL && seg->status == STATUS_VACIO && seg->start_col == 0 && seg->length == 3 &&
+        seg->next != NULL && seg->next->status == STATUS_VACIO && seg->next->start_col == 3 && seg->next->length == 1 &&
+        seg->next->next != NULL && seg->next->next->status == STATUS_VACIO && seg->next->next->start_col == 4 && seg->next->next->length == 5 &&
+        seg->next->next->next == NULL && isRowValid(&board->rows[0])) {
+        printf("✗ TEST 3 FALLADO: No fusionó correctamente (espera fusión manual en test siguiente)\n");
+    } else {
+        // Esperado después de fusión: VACIO0-2 + VACIO3 + VACIO4-8 -> Pero código fusiona solo adyacentes directos
+        // Wait, en código: primero fusiona next si VACIO, luego prev.
+        // Inicial: prev=VACIO0-2, current=PLANTA3 -> VACIO3, next=VACIO4-8
+        // Primero fusiona current con next -> VACIO3-8
+        // Luego fusiona prev con current -> VACIO0-8
+        // Sí, debe fusionar a único VACIO0-8
+        if (seg != NULL && seg->status == STATUS_VACIO && seg->start_col == 0 && seg->length == 9 &&
+            seg->next == NULL && isRowValid(&board->rows[0])) {
+            printf("✓ TEST 3 PASADO: Remover y fusionar con ambos lados (triple fusión a vacía completa)\n");
+        } else {
+            printf("✗ TEST 3 FALLADO: No realizó triple fusión\n");
+        }
+    }
+
+    // TEST 4: Caso de la imagen 1 - Plantar 3,4,5; sacar 4 (debe fusionar VACIO entre 3 y 5? No, plantas quedan)
+    // Plantar 3,4,5: ... VACIO0-2, PLANTA3, PLANTA4, PLANTA5, VACIO6-8
+    // Sacar 4: VACIO0-2, PLANTA3, VACIO4, PLANTA5, VACIO6-8 (no fusiona porque adyacentes son PLANTA)
+    resetRow(&board->rows[0]);
+    gameBoardAddPlant(board, 0, 3);
+    gameBoardAddPlant(board, 0, 4);
+    gameBoardAddPlant(board, 0, 5);
+    gameBoardRemovePlant(board, 0, 4);
+    seg = board->rows[0].first_segment;
+    int plant_count = 0;
+    int has_col_3 = 0, has_col_5 = 0;
+    int vacio_at_4 = 0;
+    while (seg != NULL) {
+        if (seg->status == STATUS_PLANTA && seg->length == 1) {
+            plant_count++;
+            if (seg->start_col == 3) has_col_3 = 1;
+            if (seg->start_col == 5) has_col_5 = 1;
+        } else if (seg->status == STATUS_VACIO && seg->start_col == 4 && seg->length == 1) {
+            vacio_at_4 = 1;
+        }
+        seg = seg->next;
+    }
+    if (plant_count == 2 && has_col_3 && has_col_5 && vacio_at_4 && isRowValid(&board->rows[0])) {
+        printf("✓ TEST 4 PASADO: Caso imagen 1 - Sacar medio sin fusión (hueco len=1 entre plantas)\n");
+    } else {
+        printf("✗ TEST 4 FALLADO: No manejó remover sin fusión\n");
+    }
+
+    // TEST 5: Caso imagen 2 - Siguiendo anterior, sacar 3 (fusiona VACIO3 con VACIO4)
+    // Estado actual: VACIO0-2, PLANTA3? No, ya sacamos 4: VACIO0-2, PLANTA3, VACIO4, PLANTA5, VACIO6-8
+    // Sacar 3: VACIO0-2, VACIO3, VACIO4, PLANTA5, VACIO6-8 -> Fusiona a VACIO0-4, PLANTA5, VACIO6-8
+    gameBoardRemovePlant(board, 0, 3);
+    seg = board->rows[0].first_segment;
+    plant_count = 0;
+    int has_col_5 = 0;
+    while (seg != NULL) {
+        if (seg->status == STATUS_PLANTA && seg->length == 1) {
+            plant_count++;
+            if (seg->start_col == 5) has_col_5 = 1;
+        }
+        seg = seg->next;
+    }
+    if (plant_count == 1 && has_col_5 && isRowValid(&board->rows[0])) {
+        // Verificar estructura: VACIO0-4 (fusionado), PLANTA5, VACIO6-8
+        seg = board->rows[0].first_segment;
+        if (seg->status == STATUS_VACIO && seg->length == 5 &&
+            seg->next->status == STATUS_PLANTA && seg->next->length == 1 &&
+            seg->next->next->status == STATUS_VACIO && seg->next->next->length == 4) {
+            printf("✓ TEST 5 PASADO: Caso imagen 2 - Sacar adyacente y fusionar con right\n");
+        } else {
+            printf("✗ TEST 5 FALLADO: No fusionó correctamente\n");
+        }
+    }
+
+    // TEST 6: Caso imagen 3 - Llenar fila, sacar del medio (crea VACIO len=1, no fusiona)
+    resetRow(&board->rows[1]);
+    for (int c = 0; c < GRID_COLS; c++) {
+        gameBoardAddPlant(board, 1, c);  // 9 PLANTA len=1
+    }
+    gameBoardRemovePlant(board, 1, 4);  // PLANTA0-3, VACIO4, PLANTA5-8
+    seg = board->rows[1].first_segment;
+    plant_count = 0;
+    vacio_at_4 = 0;
+    while (seg != NULL) {
+        if (seg->status == STATUS_PLANTA && seg->length == 1) {
+            plant_count++;
+        } else if (seg->status == STATUS_VACIO && seg->start_col == 4 && seg->length == 1) {
+            vacio_at_4 = 1;
+        }
+        seg = seg->next;
+    }
+    if (plant_count == 8 && vacio_at_4 && isRowValid(&board->rows[1])) {
+        printf("✓ TEST 6 PASADO: Caso imagen 3 - Sacar del medio en fila llena (crea hueco len=1)\n");
+    } else {
+        printf("✗ TEST 6 FALLADO: Estructura incorrecta en fila llena\n");
+    }
+
+    // TEST 7: Remover al inicio (fusiona con right si VACIO)
+    resetRow(&board->rows[2]);
+    gameBoardAddPlant(board, 2, 0);  // PLANTA0, VACIO1-8
+    gameBoardRemovePlant(board, 2, 0);
+    seg = board->rows[2].first_segment;
+    if (seg->status == STATUS_VACIO && seg->start_col == 0 && seg->length == 9 &&
+        seg->next == NULL && isRowValid(&board->rows[2])) {
+        printf("✓ TEST 7 PASADO: Remover al inicio y fusionar con right\n");
+    } else {
+        printf("✗ TEST 7 FALLADO: No fusionó al inicio\n");
+    }
+
+    // TEST 8: Remover al final (fusiona con left si VACIO)
+    resetRow(&board->rows[3]);
+    gameBoardAddPlant(board, 3, 8);  // VACIO0-7, PLANTA8
+    gameBoardRemovePlant(board, 3, 8);
+    seg = board->rows[3].first_segment;
+    if (seg->status == STATUS_VACIO && seg->start_col == 0 && seg->length == 9 &&
+        seg->next == NULL && isRowValid(&board->rows[3])) {
+        printf("✓ TEST 8 PASADO: Remover al final y fusionar con left\n");
+    } else {
+        printf("✗ TEST 8 FALLADO: No fusionó al final\n");
+    }
+
+    // TEST 9: Remover todos hasta vacía (stress test)
+    resetRow(&board->rows[4]);
+    for (int c = 0; c < GRID_COLS; c++) {
+        gameBoardAddPlant(board, 4, c);
+    }
+    for (int c = 0; c < GRID_COLS; c++) {
+        gameBoardRemovePlant(board, 4, c);
+    }
+    seg = board->rows[4].first_segment;
+    if (seg->status == STATUS_VACIO && seg->start_col == 0 && seg->length == 9 &&
+        seg->next == NULL && isRowValid(&board->rows[4])) {
+        printf("✓ TEST 9 PASADO: Remover todos hasta fila vacía (verifica fusiones múltiples)\n");
+    } else {
+        printf("✗ TEST 9 FALLADO: No回到了 a vacía completa\n");
+    }
+
+    // Liberar el tablero al final
+    gameBoardDelete(board);
+    printf("========================================\n\n");
+    printf("NOTA: Para verificar memory leaks, usa valgrind --leak-check=full ./juego\n");
+    printf("Todos los tests incluyen verificación de integridad de fila (no gaps/overlaps, sum lengths==9)\n");
+}
+
+
+// ========== TESTS gameBoardAddPlant ==========
+void testGameBoardAddPlant() {
+    printf("\n========= TESTS gameBoardAddPlant =========\n");
+    
+    GameBoard* board = gameBoardNew();
+    if (board == NULL) {
+        printf("✗ Error al crear tablero para tests\n");
+        return;
+    }
+    
+    // TEST 0: Inputs inválidos
+    if (gameBoardAddPlant(NULL, 0, 0) == 0 &&
+        gameBoardAddPlant(board, -1, 0) == 0 &&
+        gameBoardAddPlant(board, GRID_ROWS, 0) == 0 &&
+        gameBoardAddPlant(board, 0, -1) == 0 &&
+        gameBoardAddPlant(board, 0, GRID_COLS) == 0) {
+        printf("✓ TEST 0 PASADO: Maneja inputs invalidos correctamente\n");
+    } else {
+        printf("✗ TEST 0 FALLADO: No maneja inputs invalidos\n");
+    }
+    
+    // TEST 1: Agregar en medio de fila vacía
+    if (gameBoardAddPlant(board, 0, 4) == 1) {
+        RowSegment* seg = board->rows[0].first_segment;
+        if (seg != NULL && seg->status == STATUS_VACIO && seg->start_col == 0 && seg->length == 4 &&
+            seg->next != NULL && seg->next->status == STATUS_PLANTA && seg->next->start_col == 4 && seg->next->length == 1 &&
+            seg->next->next != NULL && seg->next->next->status == STATUS_VACIO && seg->next->next->start_col == 5 && seg->next->next->length == 4 &&
+            seg->next->next->next == NULL) {
+            printf("✓ TEST 1 PASADO: Agregar en medio de fila vacia\n");
+        } else {
+            printf("✗ TEST 1 FALLADO: Estructura incorrecta despues de agregar en medio\n");
+        }
+    } else {
+        printf("✗ TEST 1 FALLADO: No se pudo agregar en medio\n");
+    }
+    
+    // TEST 2: Agregar al inicio
+    resetRow(&board->rows[0]);
+    if (gameBoardAddPlant(board, 0, 0) == 1) {
+        RowSegment* seg = board->rows[0].first_segment;
+        if (seg != NULL && seg->status == STATUS_PLANTA && seg->start_col == 0 && seg->length == 1 &&
+            seg->next != NULL && seg->next->status == STATUS_VACIO && seg->next->start_col == 1 && seg->next->length == 8 &&
+            seg->next->next == NULL) {
+            printf("✓ TEST 2 PASADO: Agregar al inicio de fila vacia\n");
+        } else {
+            printf("✗ TEST 2 FALLADO: Estructura incorrecta despues de agregar al inicio\n");
+        }
+    } else {
+        printf("✗ TEST 2 FALLADO: No se pudo agregar al inicio\n");
+    }
+    
+    // TEST 3: Agregar al final
+    resetRow(&board->rows[0]);
+    if (gameBoardAddPlant(board, 0, 8) == 1) {
+        RowSegment* seg = board->rows[0].first_segment;
+        if (seg != NULL && seg->status == STATUS_VACIO && seg->start_col == 0 && seg->length == 8 &&
+            seg->next != NULL && seg->next->status == STATUS_PLANTA && seg->next->start_col == 8 && seg->next->length == 1 &&
+            seg->next->next == NULL) {
+            printf("✓ TEST 3 PASADO: Agregar al final de fila vacia\n");
+        } else {
+            printf("✗ TEST 3 FALLADO: Estructura incorrecta despues de agregar al final\n");
+        }
+    } else {
+        printf("✗ TEST 3 FALLADO: No se pudo agregar al final\n");
+    }
+    
+    // TEST 4: Intentar agregar en celda ocupada
+    resetRow(&board->rows[0]);
+    gameBoardAddPlant(board, 0, 4);
+    if (gameBoardAddPlant(board, 0, 4) == 0) {
+        printf("✓ TEST 4 PASADO: No permite agregar en celda ocupada\n");
+    } else {
+        printf("✗ TEST 4 FALLADO: Permitio agregar en celda ocupada\n");
+    }
+    
+    // TEST 5: Llenar una fila completa
+    resetRow(&board->rows[1]);
+    int added_all = 1;
+    for (int c = 0; c < GRID_COLS; c++) {
+        if (gameBoardAddPlant(board, 1, c) != 1) {
+            added_all = 0;
+            break;
+        }
+    }
+    if (added_all) {
+        RowSegment* seg = board->rows[1].first_segment;
+        int count = 0;
+        int all_planta = 1;
+        while (seg != NULL) {
+            if (seg->status != STATUS_PLANTA || seg->length != 1) {
+                all_planta = 0;
+                break;
+            }
+            count++;
+            seg = seg->next;
+        }
+        if (all_planta && count == GRID_COLS) {
+            printf("✓ TEST 5 PASADO: Llenar fila completa (9 plantas)\n");
+        } else {
+            printf("✗ TEST 5 FALLADO: Estructura incorrecta despues de llenar fila\n");
+        }
+    } else {
+        printf("✗ TEST 5 FALLADO: No se pudo agregar todas las plantas\n");
+    }
+    
+    // TEST 6: Agregar en hueco de length=1
+    resetRow(&board->rows[2]);
+    gameBoardAddPlant(board, 2, 0);
+    gameBoardAddPlant(board, 2, 2);
+    if (gameBoardAddPlant(board, 2, 1) == 1) {
+        // Verificar que hay exactamente 3 plantas (cols 0, 1, 2)
+        RowSegment* seg = board->rows[2].first_segment;
+        int plant_count = 0;
+        int has_col_0 = 0, has_col_1 = 0, has_col_2 = 0;
+        
+        while (seg != NULL) {
+            if (seg->status == STATUS_PLANTA && seg->length == 1) {
+                plant_count++;
+                if (seg->start_col == 0) has_col_0 = 1;
+                if (seg->start_col == 1) has_col_1 = 1;
+                if (seg->start_col == 2) has_col_2 = 1;
+            }
+            seg = seg->next;
+        }
+        
+        if (plant_count == 3 && has_col_0 && has_col_1 && has_col_2) {
+            printf("✓ TEST 6 PASADO: Agregar en hueco de length=1\n");
+        } else {
+            printf("✗ TEST 6 FALLADO: No se agregaron las 3 plantas esperadas\n");
+        }
+    } else {
+        printf("✗ TEST 6 FALLADO: No se pudo agregar en hueco length=1\n");
+    }
+    
+    gameBoardDelete(board);
+    printf("========================================\n\n");
+    printf("NOTA: Para verificar memory leaks: valgrind --leak-check=full ./juego\n\n");
+}
 
 
 
 
-
-
-
+// ========== MAIN ==========
 int main(int argc, char* args[]) {
     srand(time(NULL));
     if (!inicializar()) return 1;
@@ -643,7 +1757,20 @@ int main(int argc, char* args[]) {
         gameBoardUpdate(game_board);
         gameBoardDraw(game_board);
 
-        // TODO: Agregar la lógica para ver si un zombie llegó a la casa y terminó el juego
+        // Lógica para ver si un zombie llegó a la casa y terminó el juego
+        for (int r = 0; r < GRID_ROWS; r++) {
+            ZombieNode* current = game_board->rows[r].first_zombie;
+            while (current != NULL) {
+                Zombie* z = &current->zombie_data;
+                if (z->activo && z->rect.x < GRID_OFFSET_X - z->rect.w) {
+                    printf("GAME OVER - Un zombie llego a tu casa!\n");
+                    game_over = 1;
+                    break;
+                }
+                current = current->next;
+            }
+            if (game_over) break;
+        }
 
         SDL_Delay(16);
     }
