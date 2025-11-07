@@ -12,8 +12,8 @@ LIBS = `pkg-config --libs sdl2 SDL2_image`
 EXEC = juego
 # Archivos fuente (.c) a compilar.
 # Cambien esta línea para compilar el archivo que quieran:
-SRCS = juego_base.c
-#SRCS = solucion_esqueleto.c
+#SRCS = juego_base.c
+SRCS = solucion_esqueleto.c
 #SRCS = tp_resuelto.c
 # --- Reglas de Compilación ---
 # La regla por defecto: se ejecuta cuando escribís solo "make"
