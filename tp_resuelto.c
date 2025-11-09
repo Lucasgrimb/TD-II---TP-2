@@ -108,9 +108,6 @@ GameBoard* game_board = NULL;
 
 
 
-
-
-
 // ========= FUNCIONES =========
 
 
@@ -261,7 +258,6 @@ static void resetRow(GardenRow* row) {
 
 /**
  * Agrega una planta en la grilla (fila y columna).
- * Esta es la función principal de "división de segmentos" pedida en el TP.
  * La idea es buscar en la lista de RowSegment el segmento VACIO que
  * contiene la 'col' deseada. Una vez encontrado, ese segmento se
  * divide en 1, 2 o 3 segmentos nuevos (VACIO, PLANTA, VACIO),
@@ -411,7 +407,6 @@ int gameBoardAddPlant(GameBoard* board, int row, int col) {
  * Resuelve el problema de la fragmentación de la lista implementando la
  * lógica de FUSIÓN: si el nuevo segmento vacío tiene vecinos también vacíos
  * (izquierda o derecha), se unen en un solo segmento más grande.
- * Esto es la implementación de la Figura 2 del TP.
  */
 void gameBoardRemovePlant(GameBoard* board, int row, int col) {
     // ===== VALIDACIONES =====
@@ -489,12 +484,7 @@ void gameBoardRemovePlant(GameBoard* board, int row, int col) {
 
 
 
-
-
-
-
 //======== GAME BOARD ADD ZOMBIE ==========
-
 
 /**
  * Crea un nuevo zombie (ZombieNode) con memoria dinámica y lo
@@ -506,7 +496,7 @@ void gameBoardRemovePlant(GameBoard* board, int row, int col) {
  * que es la forma más eficiente de agregar un nodo.
  */
 void gameBoardAddZombie(GameBoard* board, int row) {
-    // Validación de robustez: chequeo de puntero NULL e índice de fila
+    // Validación: chequeo de puntero NULL e índice de fila
     if (board == NULL) {
         printf("Error: Board es NULL en gameBoardAddZombie\n");
         return;
@@ -529,13 +519,12 @@ void gameBoardAddZombie(GameBoard* board, int row) {
     nuevo_nodo->zombie_data.pos_x = SCREEN_WIDTH;  // Spawnea fuera de pantalla
     nuevo_nodo->zombie_data.rect.x = (int)nuevo_nodo->zombie_data.pos_x;
     
-    // Cálculo para centrar el sprite verticalmente dentro de la celda
-    nuevo_nodo->zombie_data.rect.y = GRID_OFFSET_Y + (row * CELL_HEIGHT) + 
-                                      (CELL_HEIGHT - ZOMBIE_FRAME_HEIGHT) / 2;
+    // Ajuste para que el rect se ajuste al tamaño de la celda (como en el original)
+    nuevo_nodo->zombie_data.rect.y = GRID_OFFSET_Y + (row * CELL_HEIGHT);
     
-    // Dimensiones del sprite (no de la celda)
-    nuevo_nodo->zombie_data.rect.w = ZOMBIE_FRAME_WIDTH;
-    nuevo_nodo->zombie_data.rect.h = ZOMBIE_FRAME_HEIGHT;
+    // Dimensiones ajustadas a la celda para escalado automático en render
+    nuevo_nodo->zombie_data.rect.w = CELL_WIDTH;
+    nuevo_nodo->zombie_data.rect.h = CELL_HEIGHT;
     
     // Valores iniciales estándar
     nuevo_nodo->zombie_data.vida = 100;
@@ -553,45 +542,22 @@ void gameBoardAddZombie(GameBoard* board, int row) {
 
 
 
-
 // ========= GAME BOARD UPDATE ==========
-
-
-
-/**
- * Helper que chequea si hay zombies activos en una fila.
- * Resuelve la necesidad de las plantas de saber si deben
- * disparar, optimizando para no disparar si la fila está vacía.
- */
-static int hayZombiesEnFila(GameBoard* board, int row) {
-    ZombieNode* z_node = board->rows[row].first_zombie;
-    while (z_node != NULL) {
-        if (z_node->zombie_data.activo) {
-            return 1; // Encontró uno
-        }
-        z_node = z_node->next;
-    }
-    return 0; // Fila limpia
-}
 
 /**
  * Helper para crear una nueva arveja.
- * La idea es encontrar el primer slot inactivo en el array
- * de arvejas y activarlo en la posición de la planta.
  */
 static void dispararArveja(GameBoard* board, Planta* p, int row) {
-    // Optimización: no disparar si no hay zombies
-    if (!hayZombiesEnFila(board, row)) {
-        return;
-    }
     
     // Busca un 'slot' de arveja inactivo
     for (int i = 0; i < MAX_ARVEJAS; i++) {
         if (!board->arvejas[i].activo) {
             board->arvejas[i].rect.x = p->rect.x + (CELL_WIDTH / 2); // Centrado
             board->arvejas[i].rect.y = p->rect.y + (CELL_HEIGHT / 4); // Centrado
+            
             board->arvejas[i].rect.w = 20;
             board->arvejas[i].rect.h = 20;
+
             board->arvejas[i].activo = 1;
             break; // Solo dispara una arveja a la vez
         }
@@ -600,8 +566,6 @@ static void dispararArveja(GameBoard* board, Planta* p, int row) {
 
 /**
  * Helper para manejar el spawn de zombies.
- * La idea es usar un timer para agregar zombies en filas
- * aleatorias cada cierto tiempo (ZOMBIE_SPAWN_RATE).
  */
 static void generarZombieSiNecesario(GameBoard* board) {
     board->zombie_spawn_timer--;
@@ -614,10 +578,6 @@ static void generarZombieSiNecesario(GameBoard* board) {
 
 /**
  * Avanza el estado del juego un "tick".
- * Esta es la función principal del "motor" del juego, que implementa
- * la lógica de la consigna.
- * La idea es actualizar el estado de todas las entidades (zombies,
- * plantas, arvejas) y manejar sus interacciones (colisiones).
  */
 void gameBoardUpdate(GameBoard* board) {
     if (board == NULL) {
@@ -625,7 +585,6 @@ void gameBoardUpdate(GameBoard* board) {
     }
 
     // ===== 1. ACTUALIZAR ZOMBIES =====
-    // Recorro cada fila y actualizo su lista de zombies.
     for (int r = 0; r < GRID_ROWS; r++) {
         ZombieNode* z_node = board->rows[r].first_zombie;
         ZombieNode* prev_z = NULL;
@@ -634,13 +593,11 @@ void gameBoardUpdate(GameBoard* board) {
             Zombie* z = &z_node->zombie_data;
             
             if (z->activo) {
-                // Muevo el zombie usando float para precisión
                 float distance_per_tick = ZOMBIE_DISTANCE_PER_CYCLE / 
                     (float)(ZOMBIE_TOTAL_FRAMES * ZOMBIE_ANIMATION_SPEED);
                 z->pos_x -= distance_per_tick;
                 z->rect.x = (int)z->pos_x;
 
-                // Actualizo su animación
                 z->frame_timer++;
                 if (z->frame_timer >= ZOMBIE_ANIMATION_SPEED) {
                     z->frame_timer = 0;
@@ -648,36 +605,30 @@ void gameBoardUpdate(GameBoard* board) {
                 }
             }
 
-            // Lógica de borrado de nodos (zombies muertos)
-            // Resuelvo el problema de borrar un nodo mientras itero.
             if (!z->activo && z->vida <= 0) {
                 ZombieNode* to_free = z_node;
                 
-                // Reconecto la lista (manejando el caso de borrar el 'head')
                 if (prev_z == NULL) {
                     board->rows[r].first_zombie = z_node->next;
                 } else {
                     prev_z->next = z_node->next;
                 }
                 
-                z_node = z_node->next; // Avanzo el iterador
-                free(to_free);         // Libero el nodo
-                continue;              // Salto el avance de 'prev_z'
+                z_node = z_node->next;
+                free(to_free);
+                continue;
             }
 
-            // Avance normal de iteradores
             prev_z = z_node;
             z_node = z_node->next;
         }
     }
 
     // ===== 2. ACTUALIZAR PLANTAS =====
-    // Recorro la lista de segmentos de cada fila.
     for (int r = 0; r < GRID_ROWS; r++) {
         RowSegment* seg = board->rows[r].first_segment;
         
         while (seg != NULL) {
-            // Solo me interesan los segmentos que son PLANTAS
             if (seg->status == STATUS_PLANTA && seg->planta_data != NULL) {
                 Planta* p = seg->planta_data;
 
@@ -685,10 +636,7 @@ void gameBoardUpdate(GameBoard* board) {
                 if (p->cooldown > 0) {
                     p->cooldown--;
                 } else {
-                    // Optimización: solo marco para disparar si hay zombies
-                    if (hayZombiesEnFila(board, r)) {
-                        p->debe_disparar = 1;
-                    }
+                    p->debe_disparar = 1;
                 }
 
                 // Lógica de animación
@@ -697,7 +645,6 @@ void gameBoardUpdate(GameBoard* board) {
                     p->frame_timer = 0;
                     p->current_frame = (p->current_frame + 1) % PEASHOOTER_TOTAL_FRAMES;
 
-                    // Si debe disparar, lo hago en el frame de animación correcto
                     if (p->debe_disparar && p->current_frame == PEASHOOTER_SHOOT_FRAME) {
                         dispararArveja(board, p, r);
                         p->cooldown = 120; // Reinicio cooldown
@@ -710,12 +657,11 @@ void gameBoardUpdate(GameBoard* board) {
     }
 
     // ===== 3. ACTUALIZAR ARVEJAS =====
-    // Las arvejas siguen en un array estático, así que la lógica es simple.
+    // (Esta sección no cambia)
     for (int i = 0; i < MAX_ARVEJAS; i++) {
         if (board->arvejas[i].activo) {
             board->arvejas[i].rect.x += PEA_SPEED;
             
-            // Desactivar si sale de la pantalla
             if (board->arvejas[i].rect.x > SCREEN_WIDTH) {
                 board->arvejas[i].activo = 0;
             }
@@ -726,25 +672,22 @@ void gameBoardUpdate(GameBoard* board) {
     for (int i = 0; i < MAX_ARVEJAS; i++) {
         if (!board->arvejas[i].activo) continue;
 
-        // Optimización: calculo la fila de la arveja
         int arveja_y_center = board->arvejas[i].rect.y + board->arvejas[i].rect.h / 2;
         int arveja_row = (arveja_y_center - GRID_OFFSET_Y) / CELL_HEIGHT;
         
-        if (arveja_row < 0 || arveja_row >= GRID_ROWS) continue; // Arveja fuera de grilla
+        if (arveja_row < 0 || arveja_row >= GRID_ROWS) continue;
 
-        // Solo recorro la lista de zombies de ESA fila
         ZombieNode* z_node = board->rows[arveja_row].first_zombie;
         while (z_node != NULL) {
             Zombie* z = &z_node->zombie_data;
             
             if (z->activo && SDL_HasIntersection(&board->arvejas[i].rect, &z->rect)) {
-                board->arvejas[i].activo = 0; // Arveja muere
-                z->vida -= 25;                // Zombie recibe daño
+                board->arvejas[i].activo = 0;
+                z->vida -= 25;
                 
                 if (z->vida <= 0) {
-                    z->activo = 0; // Zombie muere
+                    z->activo = 0;
                 }
-                // Una arveja golpea solo a un zombie
                 break;
             }
             z_node = z_node->next;
@@ -771,7 +714,7 @@ void gameBoardUpdate(GameBoard* board) {
  * 1. Fondo -> 2. Plantas -> 3. Arvejas -> 4. Zombies -> 5. UI (Cursor)
  */
 void gameBoardDraw(GameBoard* board) {
-    // Validaciones de robustez
+    // Validaciones básicas
     if (board == NULL || renderer == NULL) {
         return;
     }
@@ -861,7 +804,6 @@ void gameBoardDraw(GameBoard* board) {
     // 7. Muestro el frame terminado en la pantalla
     SDL_RenderPresent(renderer);
 }
-
 
 
 
@@ -1992,7 +1934,6 @@ void cerrar() {
 // ========== MAIN ==========
 
 /**
- * Función principal del juego.
  * La idea es inicializar SDL, crear el GameBoard dinámico,
  * correr los tests, y luego entrar en el bucle principal (Game Loop).
  * El bucle maneja eventos (input), actualiza el estado (Update)
@@ -2007,7 +1948,6 @@ int main(int argc, char* args[]) {
     game_board = gameBoardNew();
 
     // --- Ejecución de Tests ---
-    // La idea es validar todas las funciones de listas enlazadas
     // antes de arrancar el juego.
     testStrDuplicate();
     testStrCompare(); 
@@ -2015,7 +1955,7 @@ int main(int argc, char* args[]) {
     testGameBoardAddZombie();  
     testGameBoardRemovePlant();   
     testGameBoardAddPlant();
-    // --- Fin de Tests ---
+
 
     SDL_Event e;
     int game_over = 0;
