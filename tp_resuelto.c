@@ -2020,3 +2020,21 @@ int main(int argc, char* args[]) {
     cerrar(); // Libero texturas y cierro SDL
     return 0;
 }
+
+
+
+
+
+
+// Uso de la IA en el desarrollo del tp: 
+
+/**
+ * En una primera instancia utilizamos la IA para ayudarnos a evaluar si realmente entendíamos los conceptos vistos en clase sobre programación en C. 
+ * Una vez teníamos los conceptos claros, usamos la IA para que nos ayude a entender a fondo la consigna y para armar un plan estructurado para comenezar a desarrollar el código. 
+ * Luego, por cada función/tests que debíamos implementar, primero la intentamos desarrollar nosotros mismos sin ayuda de IA haciendo primero un pseudocódigo y usando díagramas para armar toda la lógica de las funciones.
+ * Luego le pedimos que nos corriga lo que hicimos. 
+ * En caso de encontrar algún error o inconsistencia, le pedimos que nos explique el por qué y nos ayude a corregirlo. Para realemente aprender como se debe implementar cada funcion. 
+ * Sin embargo, en varias ocaciones la IA nos daba soluciones que no eran correctas o que no cumplían con todos los requisitos de la consigna por eso aprendimos que es muy importante siempre revisar y entender a fondo el código que la IA nos provee.
+ * Finalmente una vez que teniamos todo el codigo desarrollado, verificamos en sea correcto chequeando con tres IAs diferentes cada función (Grok, Claude, y Gemini). 
+ * Por último utilizamos IA para que nos ayude a emprolijar todo el código.
+*/
